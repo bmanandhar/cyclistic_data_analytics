@@ -1,0 +1,279 @@
+---
+title: "Google_Divvy_Analytics"
+author: "Bijaya"
+date: "2023-10-17"
+output:
+  html_document: default
+  pdf_document: default
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+This is a data analysis with the data sets from a Chicago based bike rental company Cyclistic. It owns approx 5800 bikes and 692 docking stations across the city.I being a junior data analyst, have analysed the data and derived insights based on the points put forward by the stakeholders.
+
+Data source: `https://divvy-tripdata.s3.amazonaws.com/index.html`  
+- Downloaded files: 
+  - Divvy_Trips_2019_Q1.zip
+  - Divvy_Trips_2019_Q2.zip 
+  - Divvy_Trips_2019_Q3.zip
+  - Divvy_Trips_2019_Q4.zip
+
+```{r}
+options(repos = c(CRAN = "https://cran.r-project.org"))
+```
+
+```{r}
+install.packages("RMySQL")
+install.packages("DBI")
+install.packages("dbplyr")
+```
+
+```{r}
+library(tidyverse)  #helps wrangle data
+library(lubridate)  #helps wrangle date attributes
+library(ggplot2)  #helps visualize data
+library(dplyr)
+library(RMySQL)
+library(DBI)
+getwd() #displays your working directory
+```
+### loading data
+```{r}
+# Upload Divvy datasets (csv files) here
+q1 <- read_csv("Divvy_Trips_2019_Q1.csv", show_col_types = FALSE)
+q2 <- read_csv("Divvy_Trips_2019_Q2.csv", show_col_types = FALSE)
+q3 <- read_csv("Divvy_Trips_2019_Q3.csv", show_col_types = FALSE)
+q4 <- read_csv("Divvy_Trips_2019_Q4.csv", show_col_types = FALSE)
+```
+### All dataframes combined
+```{r}
+all_trips <- bind_rows(q1, q2, q3, q4)
+```
+
+### Summary
+```{r}
+nrow(all_trips)  #How many rows are in data frame?
+dim(all_trips)  #Dimensions of the data frame?
+head(all_trips)  #See the first 6 rows of data frame.  Also tail(qs_raw)
+str(all_trips)  #See list of columns and data types (numeric, character, etc)
+summary(all_trips)  #Statistical summary of data. Mainly for numerics
+```
+# Empty cells
+```{r}
+colSums(is.na(all_trips)) #Check for missing cells in data frame
+```
+### Remove unwanted cols first
+### then rows with empty cells
+```{r}
+all_trips <- subset(all_trips, select = - c(trip_id, bike_id, gender, birth_year)) 
+all_trips <- na.omit(all_trips)
+colnames(all_trips)
+```
+
+### check to confirm rows with empty cells are removed
+
+```{r}
+all_trips[!complete.cases(all_trips), ]
+```
+# Rename Colnames for convenience 
+```{r}
+all_trips <- rename(all_trips
+                    ,started_at = start_time 
+                    ,ended_at = end_time
+                    ,start_station_name = from_station_name 
+                    ,start_station_id = from_station_id
+                    ,end_station_name = to_station_name 
+                    ,end_station_id = to_station_id 
+                    ,member_casual = user_type
+                    )
+```
+### convert date-time column types into `POSIXct`
+```{r}
+all_trips$started_at <- as.POSIXct(all_trips$started_at, format = "%m/%d/%y %H:%M")
+all_trips$ended_at <- as.POSIXct(all_trips$ended_at, format = "%m/%d/%y %H:%M")
+```
+### remove rows with "`ended_at` < `started_at`" values
+```{r}
+all_trips <- subset(all_trips, started_at < ended_at)
+dim(all_trips)
+```
+### check if above conversion took place
+```{r}
+str(all_trips$started_at)
+str(all_trips$ended_at)
+```
+### add a column for day of the week
+```{r}
+all_trips$month_name <- months(as.Date(all_trips$started_at))
+all_trips$day <- format(as.Date(all_trips$started_at), "%d")
+all_trips$year <- format(as.Date(all_trips$started_at), "%Y")
+all_trips$day_name <- format(as.Date(all_trips$started_at), "%A")
+```
+### check for how `day_name` column will look like
+```{r}
+random_sample <- all_trips[sample(nrow(all_trips), 10), ]
+random_sample
+```
+### Minimum
+```{r}
+min(all_trips$trip_duration_sec)
+```
+### Reassign to the desired column to easy-to-remember values
+```{r}
+all_trips <-  all_trips %>% 
+  mutate(member_casual = recode(member_casual
+                                ,"Subscriber" = "member"
+                                ,"Customer" = "casual"))
+```
+### Table by user_type
+```{r}
+yearly_count_by_user <- all_trips %>% 
+  group_by(member_casual) %>%
+    summarise(count = n())
+yearly_count_by_user 
+```
+### Bar Plot for User Count in 2019 
+```{r}
+# Create a ggplot for the df_mean data frame
+ggplot(yearly_count_by_user, aes(x = member_casual, y = count, fill = member_casual)) +
+  geom_bar(stat = "identity") +
+  labs(
+    title = "User Count by Type",
+    x = "Member Type",
+    y = "User Count"
+  ) +
+  theme_minimal()
+```
+### Pie Chart Representation
+```{r}
+yearly_count_by_user$percent = paste(round((yearly_count_by_user $count /sum(yearly_count_by_user $count))*100), "%")
+
+ggplot(yearly_count_by_user , aes(x = "", y = percent, fill = member_casual)) +
+  geom_col(color = "black") +
+  geom_text(aes(label = percent),
+            position = position_stack(vjust = 0.5)) +
+  coord_polar(theta = "y") +
+  theme_void()  + labs(title = "Yearly User Type Percentage")
+```
+
+
+### Mean ride_duration by user_type
+```{r}
+yearly_mean_sec_by_user <- all_trips %>%
+  group_by(member_casual) %>%
+    summarise(mean_duration_sec = round(mean(trip_duration_sec)))
+yearly_mean_sec_by_user
+```
+### Bar Plot yearly mean trip duration by user_type
+```{r}
+# Create a ggplot for the df_mean data frame
+ggplot(yearly_mean_sec_by_user, aes(x = member_casual, y = mean_duration_sec, fill = member_casual)) +
+  geom_bar(stat = "identity") +
+  labs(
+    title = "Mean Trip Duration by Member Type",
+    x = "Member Type",
+    y = "Mean Duration (seconds)"
+  ) +
+  theme_minimal()
+```
+
+### Bar chart for `rental count vs day of the week`
+```{r}
+day_of_week_total <- all_trips %>%
+  group_by(day_name) %>%
+    summarise(count = n())
+day_of_week_total
+```
+### Bar Plot average trip count against day of week 
+```{r}
+# Specify the order of days of the week
+day_order <- c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
+
+# Convert day_name to a factor with the desired order
+day_of_week_total$day_name <- factor(day_of_week_total$day_name, levels = day_order)
+
+ggplot(day_of_week_total, aes(x = day_name, y = count, fill = "day_name")) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "2019 Rentals by Day and Member Type", x = "Day Name", y = "Count") +
+  theme_minimal()
+```
+### day of the week by Member Type
+```{r}
+day_of_week_by_user <- all_trips %>%
+  group_by(day_name, member_casual) %>%
+  summarise(count = n(), .groups = "drop")
+day_of_week_by_user
+```
+### Bar Plot average trip count for day of week by user type
+```{r}
+# Create the bar chart
+# Convert day_name to a factor with the desired order
+day_of_week_by_user$day_name <- factor(day_of_week_by_user$day_name, levels = day_order)
+
+ggplot(day_of_week_by_user, aes(x = day_name, y = count, fill = member_casual)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "2019 Rentals by Day and Member Type", x = "Day Name", y = "Count") +
+  theme_minimal()
+```
+### total trips each month
+```{r}
+month_total <- all_trips %>%
+  group_by(month_name) %>%
+    summarise(count = n())
+month_total
+```
+### Bar Plot total trips each month
+```{r}
+# Specify the order of days of the week
+month_order <- c("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
+
+# Convert day_name to a factor with the desired order
+month_total$month_name <- factor(month_total$month_name, levels = month_order)
+
+ggplot(month_total, aes(x = month_name, y = count, fill = month_name)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Bar Chart of Rentals by Month and Member Type", x = "Month Name", y = "Count") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Adjust the angle as needed
+```
+### Each month total by user type
+```{r}
+month_by_user <- all_trips %>%
+  group_by(month_name, member_casual) %>%
+    summarise(count = n())
+month_by_user$month_name <- factor(month_by_user$month_name, levels = month_order)
+month_by_user
+```
+### Bar Plot Each month trip count by user type
+```{r}
+# Convert day_name to a factor with the desired order
+month_by_user$month_name <- factor(month_by_user$month_name, levels = month_order)
+
+ggplot(month_by_user, aes(x = month_name, y = count, fill = member_casual)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "2019 Rentals by Month and Member Type", x = "Month Name", y = "Count") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Adjust the angle as needed
+```
+
+### Data migration to MySQL database
+### DataFrame `all_trips` is migrated to MySQL table `Divvy_Trips_2019` under database `Divvy_Case_Study
+
+```{r}
+con <- dbConnect(
+  RMySQL::MySQL(),
+  dbname = "Divvy_Case_Study",
+  host = "localhost",
+  username = "root",
+  password = "Mnandhar2015_mac"    # encrypted for privacy
+)
+
+dbWriteTable(con, name = 'yearly_count_by_user', value = yearly_count_by_user, overwrite = TRUE)
+dbWriteTable(con, name = 'yearly_mean_sec_by_user', value = yearly_mean_sec_by_user, overwrite = TRUE)
+dbWriteTable(con, name = 'day_of_week_total', value = day_of_week_total, overwrite = TRUE)
+dbWriteTable(con, name = 'day_of_week_by_user', value = day_of_week_by_user, overwrite = TRUE)
+dbWriteTable(con, name = 'month_total', value = month_total, overwrite = TRUE)
+dbWriteTable(con, name = 'month_by_user', value = month_by_user, overwrite = TRUE)
+dbWriteTable(con, name = 'Divvy_Trips_2019', value = all_trips, overwrite = TRUE)
+
+
+dbDisconnect(con)
+```
